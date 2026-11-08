@@ -5,7 +5,6 @@ set +x
 MODEL="${OLLAMA_MODEL:-qwen3-coder:30b}"
 MODEL_DIR="${OLLAMA_MODELS:-/kaggle/working/ollama_models}"
 CONTEXT="${OLLAMA_CONTEXT_LENGTH:-32768}"
-PUBLIC_URL="${OLLAMA_PUBLIC_URL:-}"
 BASE="/kaggle/working"
 OLLAMA_LOG="$BASE/ollama.log"
 CLOUDFLARED_LOG="$BASE/cloudflared.log"
@@ -198,11 +197,6 @@ if [[ -n "$TUNNEL_SECRET" ]]; then
   if command -v cloudflared >/dev/null; then
     if [[ -f "$BASE/cloudflared.pid" ]] && kill -0 "$(cat "$BASE/cloudflared.pid")" 2>/dev/null; then
       status "Cloudflare Tunnel process is already running."
-      if [[ -n "$PUBLIC_URL" ]]; then
-        status "Configured public API endpoint: ${PUBLIC_URL%/}"
-      else
-        status "Set OLLAMA_PUBLIC_URL in the notebook environment to display your public endpoint here."
-      fi
     else
       export TUNNEL_TOKEN="$TUNNEL_SECRET"
       status "Starting Cloudflare Tunnel..."
@@ -217,12 +211,7 @@ if [[ -n "$TUNNEL_SECRET" ]]; then
         sleep 1
       done
       if grep -qi 'Registered tunnel connection' "$CLOUDFLARED_LOG" 2>/dev/null; then
-        status "Cloudflare Tunnel connected."
-        if [[ -n "$PUBLIC_URL" ]]; then
-          status "Configured public API endpoint: ${PUBLIC_URL%/}"
-        else
-          status "Set OLLAMA_PUBLIC_URL in the notebook environment to display your public endpoint here."
-        fi
+        status "Cloudflare Tunnel connected; hostname routing is configured in Cloudflare."
       else
         status "Tunnel started but not confirmed connected; inspect $CLOUDFLARED_LOG."
         tail -n 15 "$CLOUDFLARED_LOG" 2>/dev/null || true
