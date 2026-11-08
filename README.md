@@ -6,7 +6,7 @@ Small, versioned setup scripts for model experiments in Kaggle notebooks.
 
 | Script | What it does |
 | --- | --- |
-| [`kaggle-qwen-boot.sh`](scripts/kaggle/kaggle-qwen-boot.sh) | Checks for an NVIDIA GPU, installs Ollama if needed, reuses or downloads Qwen, starts Ollama, and checks for `QWEN_OK`. If the Kaggle secret exists, it also starts the configured Cloudflare Tunnel. |
+| [`kaggle-qwen-boot.sh`](scripts/kaggle/kaggle-qwen-boot.sh) | Checks for an NVIDIA GPU, installs Ollama if needed, reuses or downloads Qwen, starts Ollama, and checks for `QWEN_OK`. It streams timestamped setup progress, model download output, and the Qwen smoke-test response into the notebook cell. If the Kaggle secret exists, it also starts the configured Cloudflare Tunnel. |
 
 Scripts are kept separate from model weights. Qwen files remain in Kaggle's `/kaggle/working/ollama_models` directory when Kaggle file persistence is enabled.
 
@@ -37,7 +37,7 @@ Use a pinned release, review the script, and verify its checksum before running 
 ```bash
 %%bash
 set -euo pipefail
-VERSION=v0.1.0
+VERSION=v0.1.1
 BASE="https://github.com/0xnbk/kaggle-llm-scripts/releases/download/$VERSION"
 curl -fsSL "$BASE/kaggle-qwen-boot.sh" -o /tmp/kaggle-qwen-boot.sh
 curl -fsSL "$BASE/SHA256SUMS" -o /tmp/SHA256SUMS
@@ -45,7 +45,7 @@ curl -fsSL "$BASE/SHA256SUMS" -o /tmp/SHA256SUMS
 bash /tmp/kaggle-qwen-boot.sh
 ```
 
-The script uses `/kaggle/working/ollama_models` by default, skips pulling `qwen3-coder:30b` when Ollama already sees it, and prints `QWEN_OK` after a successful local request. Logs are written to `/kaggle/working/ollama.log` and, if started, `/kaggle/working/cloudflared.log`. Kaggle stops the processes when its session ends; the script does not keep a GPU session alive.
+The script uses `/kaggle/working/ollama_models` by default, skips pulling `qwen3-coder:30b` when Ollama already sees it, and prints `QWEN_OK` after a successful local request. Setup stages and model-pull output appear in the cell as they happen. Logs are also written to `/kaggle/working/ollama.log`, `/kaggle/working/ollama-pull.log`, and, if started, `/kaggle/working/cloudflared.log`. Kaggle stops the processes when its session ends; the script does not keep a GPU session alive.
 
 ## Release process
 
