@@ -20,11 +20,19 @@ In a Kaggle notebook code cell, run:
 
 This fetches the latest script from `main`. For a fixed, checksum-verified version, use the pinned release instructions below.
 
+To have the script print your public API base URL after the tunnel connects, set `OLLAMA_PUBLIC_URL` in the notebook environment. The URL is configuration, not a credential; setting it only changes the status message. Cloudflare's tunnel hostname and Access policy still need to be configured in Cloudflare.
+
+```bash
+%%bash
+export OLLAMA_PUBLIC_URL="https://llm.example.com/v1"
+curl -fsSL https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/scripts/kaggle/kaggle-qwen-boot.sh | bash
+```
+
 ## Before using the Kaggle Qwen script
 
 1. Select a GPU accelerator and enable Internet in the notebook settings.
 2. Enable file persistence if you want the model files in `/kaggle/working/ollama_models` to carry over between sessions.
-3. For the optional tunnel, add a Kaggle Secret named `CF_TUNNEL_TOKEN` under **Add-ons → Secrets**, paste the token for your existing Cloudflare Tunnel, and grant the notebook access to that secret. The script never stores the token in this repository. Without the secret, it prints these instructions and still runs the local Qwen check.
+3. For the optional tunnel, add a Kaggle Secret named `CF_TUNNEL_TOKEN` under **Add-ons → Secrets**, paste the token for your existing Cloudflare Tunnel, and grant the notebook access to that secret. The script never stores the token in this repository. Without the secret, it prints these instructions and still runs the local Qwen check. The Cloudflare tunnel must already route your chosen hostname to Ollama; `OLLAMA_PUBLIC_URL` only tells the script what endpoint to display.
 
 ### Kaggle policy note
 
@@ -37,7 +45,7 @@ Use a pinned release, review the script, and verify its checksum before running 
 ```bash
 %%bash
 set -euo pipefail
-VERSION=v0.1.1
+VERSION=v0.1.2
 BASE="https://github.com/0xnbk/kaggle-llm-scripts/releases/download/$VERSION"
 curl -fsSL "$BASE/kaggle-qwen-boot.sh" -o /tmp/kaggle-qwen-boot.sh
 curl -fsSL "$BASE/SHA256SUMS" -o /tmp/SHA256SUMS
