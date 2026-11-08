@@ -10,6 +10,16 @@ Small, versioned setup scripts for model experiments in Kaggle notebooks.
 
 Scripts are kept separate from model weights. Qwen files remain in Kaggle's `/kaggle/working/ollama_models` directory when Kaggle file persistence is enabled.
 
+## Quick start
+
+In a Kaggle notebook code cell, run:
+
+```bash
+!curl -fsSL https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/scripts/kaggle/kaggle-qwen-boot.sh | bash
+```
+
+This fetches the latest script from `main`. For a fixed, checksum-verified version, use the pinned release instructions below.
+
 ## Before using the Kaggle Qwen script
 
 1. Select a GPU accelerator and enable Internet in the notebook settings.
