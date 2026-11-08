@@ -1,0 +1,41 @@
+name: Validate and publish release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Check shell syntax
+        run: bash -n scripts/kaggle/*.sh
+
+      - name: Package scripts and checksums
+        run: |
+          mkdir -p dist
+          cp scripts/kaggle/*.sh dist/
+          (cd dist && sha256sum *.sh > SHA256SUMS)
+
+      - name: Create draft release and attach scripts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/*.sh dist/SHA256SUMS \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --draft
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false
