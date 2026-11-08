@@ -42,3 +42,7 @@ The script uses `/kaggle/working/ollama_models` by default, skips pulling `qwen3
 Push a version tag such as `v0.2.0`. GitHub Actions checks shell syntax, attaches every script in `scripts/kaggle/` plus `SHA256SUMS`, and publishes a GitHub Release. Published releases are configured to be immutable, so a versioned download stays tied to that release.
 
 To add another script, place it in `scripts/kaggle/`, document it in the table above, then push a new version tag.
+
+## License
+
+This repository is licensed under the [MIT License](LICENSE). Copyright (c) 2026 nbk.dev.
