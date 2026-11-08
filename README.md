@@ -20,6 +20,45 @@ In a Kaggle notebook code cell, run:
 
 This fetches the latest script from `main`. For a fixed, checksum-verified version, use the pinned release instructions below.
 
+## Set up a Cloudflare Tunnel with your hostname
+
+Do this once for the Cloudflare hostname and tunnel. The script does not create Cloudflare routes or need to know your hostname: Cloudflare stores the hostname-to-service route, and the script only connects the tunnel from Kaggle. See Cloudflare's [Tunnel setup guide](https://developers.cloudflare.com/tunnel/get-started/) and [Access service token guide](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/).
+
+1. **Make sure your domain is active in Cloudflare.** Use a hostname under a domain listed in your Cloudflare account, such as `llm.example.com`.
+2. **Create a service token for your client.** In **Zero Trust → Access controls → Service credentials → Service Tokens**, select **Create Service Token** and save both its Client ID and Client Secret in a secure store on the computer that will run OpenCode or `curl`. Cloudflare only shows the Client Secret once.
+3. **Protect the hostname with Access before publishing it.** In **Zero Trust → Access controls → Applications**, create a **Self-hosted** application for the exact hostname. Add a policy with action **Service Auth**, an **Include → Service Token** rule, and select the service token created above. Save the application. Access applications deny requests unless a policy allows them.
+4. **Create a remotely managed tunnel** if you do not already have one. In **Networking → Tunnels**, select **Create Tunnel**, choose `cloudflared`, and copy the generated tunnel token. Keep this separate from the Access Client ID and Client Secret.
+5. **Add a published application route.** Open the tunnel, select **Routes → Add route → Published application**, enter your hostname, and set **Service URL** to `http://localhost:11434`. Ollama and `cloudflared` run in the same Kaggle session, so `localhost:11434` reaches Ollama. Save the route; Cloudflare creates the DNS route for a domain managed in its zone.
+6. **Give Kaggle only the tunnel token.** In the notebook, open **Add-ons → Secrets**, create `CF_TUNNEL_TOKEN`, paste the tunnel token, and grant the notebook access. Do not put the Access Client Secret in the notebook or repository. The Kaggle script reads `CF_TUNNEL_TOKEN` and starts the connector; it does not change the hostname route or Access policy.
+7. Run the [quick-start command](#quick-start). When the tunnel reports connected, use `https://<your-hostname>/v1` as the OpenAI-compatible API base URL. Keep the Access Client ID and Client Secret on the client and send them as `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers on API requests.
+
+If you already created the tunnel, route, Access application, and service token, reuse them; just confirm that the route points to `http://localhost:11434` and that the Kaggle secret contains the current tunnel token.
+
+### Verify token-protected streaming
+
+Ollama supports streaming at `/v1/chat/completions`. Send `"stream": true`; for this endpoint Ollama returns Server-Sent Events. Cloudflare Tunnel streams a response as it arrives when the origin responds with `Content-Type: text/event-stream`; otherwise it buffers the response by default. No separate tunnel streaming switch is needed for SSE. See [Ollama OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility) and [Cloudflare Tunnel streaming troubleshooting](https://developers.cloudflare.com/tunnel/troubleshooting/).
+
+Run this from the machine holding your Access credentials. Set the three environment variables from a secure local secret store first. `--no-buffer` makes `curl` display each event as it arrives.
+
+```bash
+: "${API_BASE:?Set API_BASE to https://<your-hostname>/v1}"
+: "${CF_ACCESS_CLIENT_ID:?Load the Access Client ID from your secure store}"
+: "${CF_ACCESS_CLIENT_SECRET:?Load the Access Client Secret from your secure store}"
+
+curl --no-buffer --include --max-time 180 \
+  -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+  -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+  -H "Content-Type: application/json" \
+  --data-binary '{
+    "model": "qwen3-coder:30b",
+    "messages": [{"role": "user", "content": "Count from 1 to 5."}],
+    "stream": true
+  }' \
+  "$API_BASE/chat/completions"
+```
+
+The response headers should include `Content-Type: text/event-stream`, followed by `data:` events as Qwen generates them. A `401` or `403` points to the Access application, policy, or client headers. If the answer arrives all at once, check the response `Content-Type` and make sure the client is calling `/v1/chat/completions` with streaming enabled.
+
 ## Before using the Kaggle Qwen script
 
 1. Select a GPU accelerator and enable Internet in the notebook settings.
