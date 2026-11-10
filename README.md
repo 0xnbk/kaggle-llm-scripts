@@ -2,9 +2,55 @@
 
 Small, versioned setup scripts for model experiments in Kaggle notebooks. Run Qwen with Ollama on a Kaggle GPU, then use it from OpenCode on your own computer through an authenticated Cloudflare Tunnel.
 
+## Set up with an AI agent
+
+Copy this into Codex, Claude Code, OpenCode, or another coding agent with local file and network access:
+
+```text
+Help me set up Kaggle Qwen for OpenCode using this guide:
+https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/README.md
+Read the complete README, including collapsed sections. Inspect my OS,
+OpenCode version, and existing configuration before making changes.
+Reuse existing setup, preserve unrelated settings, and ask only for missing
+information. Guide me through any Cloudflare or Kaggle dashboard steps
+that you cannot perform. Keep my domain private in generated public files.
+Load credentials from a secure store; never request secrets in chat or put
+credentials in source files, command history, or logs. Verify the model
+list, streamed inference, and OpenCode QWEN_OK check. Report what passed
+and any remaining manual steps, then give me the command for daily use.
+```
+
+<details>
+<summary><strong>Launch Codex or Claude Code with the setup request</strong></summary>
+
+Use one of these commands with an already installed and signed-in agent. Each starts an interactive session with a setup request; it asks that agent to configure **OpenCode** using the instructions above.
+
+**Codex**
+
+```bash
+codex "Read https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/README.md and follow its 'Set up with an AI agent' instructions to help me configure Kaggle Qwen for OpenCode."
+```
+
+**Claude Code**
+
+```bash
+claude "Read https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/README.md and follow its 'Set up with an AI agent' instructions to help me configure Kaggle Qwen for OpenCode."
+```
+
+These commands use the agent's existing model and permissions to help with setup. They do not configure Codex or Claude Code to run Qwen. Cloudflare and Kaggle actions still depend on the access available to that agent. If it cannot fetch the URL, provide the raw README text directly.
+
+Command syntax: [official Codex CLI reference](https://learn.chatgpt.com/docs/cli/reference) and [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference).
+
+</details>
+
+<details>
+<summary><strong>Available script</strong></summary>
+
 | Script | What it does |
 | --- | --- |
 | [`kaggle-qwen-boot.sh`](scripts/kaggle/kaggle-qwen-boot.sh) | Checks for an NVIDIA GPU, installs Ollama if needed, reuses or downloads Qwen, starts Ollama, and checks for `QWEN_OK`. It streams setup progress and model output into the notebook. If `CF_TUNNEL_TOKEN` is available, it also connects an existing Cloudflare Tunnel. |
+
+</details>
 
 **Already set up?** Start your Kaggle session, run the script in [Step 5](#5-start-qwen-in-kaggle), then follow [Use OpenCode](#8-use-opencode-for-your-project). For a new setup, follow the steps below in order.
 
@@ -16,6 +62,9 @@ Small, versioned setup scripts for model experiments in Kaggle notebooks. Run Qw
 - [Troubleshooting](#troubleshooting)
 - [Run a versioned release](#run-a-versioned-release)
 - [Release process](#release-process)
+
+<details>
+<summary><strong>How the connection works</strong></summary>
 
 ## How the connection works
 
@@ -63,17 +112,22 @@ The local service URL uses HTTP because that connection stays inside the Kaggle 
 
 The tunnel token cannot authenticate OpenCode requests. The Access credentials cannot start the tunnel. Keep credentials out of source files, commits, notebook output, and shared logs. Access cookies such as `CF_Authorization` are credentials too.
 
+</details>
+
+<details>
+<summary><strong>Known working settings</strong></summary>
+
 ## Known working settings
 
-The following setup returned `QWEN_OK` through OpenCode on **2026-11-10**, after the HTTP Host Header correction:
+The model and runtime settings below returned `QWEN_OK` through OpenCode on **2026-11-10**, after the HTTP Host Header correction. Public hostname values are examples; use your own domain.
 
-| Setting | Working value |
+| Setting | Example or tested value |
 | --- | --- |
-| Public hostname | `llm.retailist.dev` |
-| OpenCode API base URL | `https://llm.retailist.dev/v1` |
+| Public hostname | `llm.example.com` |
+| OpenCode API base URL | `https://llm.example.com/v1` |
 | Tunnel service URL | `http://localhost:11434` |
 | Tunnel HTTP Host Header | `localhost:11434` |
-| Access application | Self-hosted application covering `llm.retailist.dev` and all its API paths. |
+| Access application | Self-hosted application covering `llm.example.com` and all its API paths. |
 | Access policy | **Service Auth**, including the client's service token. |
 | Ollama bind address | `127.0.0.1:11434` |
 | Model | `qwen3-coder:30b` |
@@ -83,11 +137,18 @@ The following setup returned `QWEN_OK` through OpenCode on **2026-11-10**, after
 | OpenCode model reference | `kaggle-qwen/qwen3-coder:30b` |
 | macOS credential store | Keychain service `kaggle-qwen-cloudflare`, with accounts `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET`. |
 
-This hostname identifies the maintainer's setup; it is **not a shared public inference service**. The instructions below use `llm.example.com`. Replace that example with your own hostname, or use the existing hostname if you are maintaining the setup above.
+All public API hostnames in the examples use `example.com`. Configure your own hostname in Cloudflare and your local client; this repository does not provide a shared inference endpoint.
 
 The successful one-prompt check proves the client-to-model connection. It does not prove repository-scale coding, tool use, or long-session reliability.
 
+</details>
+
 ## Step-by-step setup
+
+Expand one step at a time. Start at Step 1 for a new setup, or open the step you need.
+
+<details>
+<summary><strong>1. Choose your hostname</strong></summary>
 
 ### 1. Choose your hostname
 
@@ -96,6 +157,11 @@ The successful one-prompt check proves the client-to-model connection. It does n
 3. Use that exact hostname for the Access application, tunnel route, and OpenCode API base URL throughout this guide.
 
 The hostname and route are configured **in Cloudflare**. The Kaggle script does not create DNS records, choose a hostname, or need an `OLLAMA_PUBLIC_URL` variable. It only connects the tunnel using its token. See the [Cloudflare Tunnel setup guide](https://developers.cloudflare.com/tunnel/get-started/).
+
+</details>
+
+<details>
+<summary><strong>2. Create client credentials and protect the hostname</strong></summary>
 
 ### 2. Create client credentials and protect the hostname
 
@@ -111,6 +177,11 @@ Set up Access before publishing the route so the API has an authentication polic
 
 OpenCode sends the Client ID and Client Secret in the `CF-Access-Client-Id` and `CF-Access-Client-Secret` request headers. A browser login alone does not supply these headers to OpenCode. See [Cloudflare Access service tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/).
 
+</details>
+
+<details>
+<summary><strong>3. Create or reuse a named tunnel</strong></summary>
+
 ### 3. Create or reuse a named tunnel
 
 1. In Cloudflare, open **Networking → Tunnels**.
@@ -118,6 +189,11 @@ OpenCode sends the Client ID and Client Secret in the `CF-Access-Client-Id` and 
 3. Copy the generated **tunnel token**. If Cloudflare shows an installation command, copy only the token value for the Kaggle secret.
 
 If you already have the intended tunnel, reuse it and retrieve its current connector token. The script installs and runs `cloudflared` inside Kaggle; you do not need to run Cloudflare's system-service installation command in the notebook.
+
+</details>
+
+<details>
+<summary><strong>4. Publish the route and set the HTTP Host Header</strong></summary>
 
 ### 4. Publish the route and set the HTTP Host Header
 
@@ -141,6 +217,11 @@ Before moving on, check these values together:
 In DNS, the expected record is a **proxied CNAME** from your hostname to `<tunnel-id>.cfargotunnel.com`, using the ID of your named tunnel. Cloudflare normally creates this when you save the published route. `localhost:11434` belongs in the route's service and HTTP Host Header settings, not in the public DNS record.
 
 The **public hostname stays your domain**. Only the Host header on the final request from `cloudflared` to Ollama becomes `localhost:11434`. This setting does not change your DNS name or OpenCode URL. Cloudflare stores it with the route; changing the route does not require downloading the model again. See [updating tunnel origin parameters](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/origin-parameters/#update-origin-parameters).
+
+</details>
+
+<details>
+<summary><strong>5. Start Qwen in Kaggle</strong></summary>
 
 ### 5. Start Qwen in Kaggle
 
@@ -167,6 +248,11 @@ The script prints the streamed answer and then a separate success marker, so see
 `QWEN_OK` here proves inference **inside Kaggle**. The tunnel message means the connector registered with Cloudflare; it does not verify your public DNS, Access policy, forwarded Host header, or OpenCode request. Verify those in Step 7.
 
 Without `CF_TUNNEL_TOKEN`, the script still runs the local model check and skips the tunnel. Keep Access credentials on your computer; the notebook only needs the tunnel token.
+
+</details>
+
+<details>
+<summary><strong>6. Configure OpenCode on your computer</strong></summary>
 
 ### 6. Configure OpenCode on your computer
 
@@ -313,6 +399,11 @@ The wrapper loads credentials for **OpenCode only**. Load the exported variables
 
 </details>
 
+</details>
+
+<details>
+<summary><strong>7. Verify the public API and OpenCode</strong></summary>
+
 ### 7. Verify the public API and OpenCode
 
 Run these checks on your computer while the Kaggle session is running. Load your Access credentials as described above, then set your public API base URL:
@@ -373,6 +464,11 @@ opencode run -m kaggle-qwen/qwen3-coder:30b \
 
 Expect `QWEN_OK` in OpenCode's response. This is the end-to-end inference check that passed for the known working setup.
 
+</details>
+
+<details>
+<summary><strong>8. Use OpenCode for your project</strong></summary>
+
 ### 8. Use OpenCode for your project
 
 Open Terminal in the project you want OpenCode to work on and launch an interactive session:
@@ -401,6 +497,11 @@ the relevant checks afterward.
 
 The tested server has a **32,768-token context window**, shared by instructions, tool definitions, file contents, conversation history, and output. Start with focused tasks and fresh sessions for separate work. [Ollama's current OpenCode guide](https://docs.ollama.com/integrations/opencode) calls for 64k or more for coding use; the 32k example here is only confirmed for the short connectivity check. Increasing the served context requires checking GPU memory and starting Ollama with the new setting. Editing OpenCode's `limit.context` alone does not increase Ollama's capacity. The script can reuse an already-running server, so changing `OLLAMA_CONTEXT_LENGTH` before rerunning it does not necessarily reconfigure that server.
 
+</details>
+
+<details>
+<summary><strong>9. Resume later or stop the session</strong></summary>
+
 ### 9. Resume later or stop the session
 
 For a later session:
@@ -412,6 +513,11 @@ For a later session:
 5. Launch OpenCode from your project directory.
 
 Closing OpenCode does not stop Kaggle. Stop the Kaggle session when finished to release its GPU resources. When Kaggle ends the session, Ollama and `cloudflared` stop and the public endpoint becomes unavailable until a connector is running again. The script does not keep a GPU session alive or bypass Kaggle session limits.
+
+</details>
+
+<details>
+<summary><strong>Troubleshooting</strong></summary>
 
 ## Troubleshooting
 
@@ -470,9 +576,19 @@ nvidia-smi
 
 The model pull log is `/kaggle/working/ollama-pull.log` when a download has run. A tunnel log may be absent if the tunnel was skipped. Inspect logs locally and remove credentials, cookies, and private request content before sharing excerpts.
 
+</details>
+
+<details>
+<summary><strong>Kaggle policy note</strong></summary>
+
 ## Kaggle policy note
 
 Kaggle's [Terms of Use](https://www.kaggle.com/terms) limit use to personal, non-commercial purposes. Its [Acceptable Use Policy](https://www.kaggle.com/aup) prohibits resource abuse, including server farming. This script starts an inference server and can start a Cloudflare Tunnel; Kaggle has not clarified whether a private, self-only setup is allowed. **Check with Kaggle before using its GPU as a remotely reachable inference server.** This repository does not grant permission to use Kaggle resources or bypass its limits.
+
+</details>
+
+<details>
+<summary><strong>Run a versioned release</strong></summary>
 
 ## Run a versioned release
 
@@ -493,12 +609,24 @@ The hostname, Access policy, and HTTP Host Header are Cloudflare configuration a
 
 The script uses `/kaggle/working/ollama_models` by default and skips pulling `qwen3-coder:30b` when Ollama already sees it. Model weights stay separate from this repository. Kaggle file persistence determines whether those files carry over between sessions.
 
+</details>
+
+<details>
+<summary><strong>Release process</strong></summary>
+
 ## Release process
 
 Push a version tag such as `v0.2.0`. GitHub Actions checks shell syntax, attaches every script in `scripts/kaggle/` plus `SHA256SUMS`, and publishes a GitHub Release. Published releases are configured to be immutable, so a versioned download stays tied to that release.
 
 To add another script, place it in `scripts/kaggle/`, document it in the table above, then push a new version tag. A README-only update can be pushed to `main` without publishing a new script release.
 
+</details>
+
+<details>
+<summary><strong>License</strong></summary>
+
 ## License
 
 This repository is licensed under the [MIT License](LICENSE). Copyright (c) 2026 nbk.dev.
+
+</details>
