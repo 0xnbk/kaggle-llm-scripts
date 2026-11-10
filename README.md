@@ -2,6 +2,10 @@
 
 Small, versioned setup scripts for model experiments in Kaggle notebooks. Run Qwen with Ollama on a Kaggle GPU, then use it from OpenCode on your own computer through an authenticated Cloudflare Tunnel.
 
+## Set up with an AI agent
+
+Copy the prompt below and paste it into your preferred coding agent to get help with setup.
+
 ```text
 Read https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/README.md and help set up this project. Inspect existing configuration, follow the documented steps, preserve unrelated settings, handle credentials securely, verify the setup, and report any remaining manual steps.
 ```
