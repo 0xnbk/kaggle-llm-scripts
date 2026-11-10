@@ -1,11 +1,1 @@
-Help me set up Kaggle Qwen for OpenCode using this guide:
-https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/README.md
-Read the complete README, including collapsed sections. Inspect my OS,
-OpenCode version, and existing configuration before making changes.
-Reuse existing setup, preserve unrelated settings, and ask only for missing
-information. Guide me through any Cloudflare or Kaggle dashboard steps
-that you cannot perform. Keep my domain private in generated public files.
-Load credentials from a secure store; never request secrets in chat or put
-credentials in source files, command history, or logs. Verify the model
-list, streamed inference, and OpenCode QWEN_OK check. Report what passed
-and any remaining manual steps, then give me the command for daily use.
+Read https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/README.md and help set up this project. Inspect existing configuration, follow the documented steps, preserve unrelated settings, handle credentials securely, verify the setup, and report any remaining manual steps.

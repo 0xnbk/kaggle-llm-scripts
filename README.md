@@ -2,16 +2,8 @@
 
 Small, versioned setup scripts for model experiments in Kaggle notebooks. Run Qwen with Ollama on a Kaggle GPU, then use it from OpenCode on your own computer through an authenticated Cloudflare Tunnel.
 
-**Codex**
-
-```bash
-QWEN_SETUP_PROMPT="$(curl -fsSL https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/SETUP_PROMPT.txt)" && codex "$QWEN_SETUP_PROMPT"
-```
-
-**Claude Code**
-
-```bash
-QWEN_SETUP_PROMPT="$(curl -fsSL https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/SETUP_PROMPT.txt)" && claude "$QWEN_SETUP_PROMPT"
+```text
+Read https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/README.md and help set up this project. Inspect existing configuration, follow the documented steps, preserve unrelated settings, handle credentials securely, verify the setup, and report any remaining manual steps.
 ```
 
 ## Available script
