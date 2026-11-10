@@ -2,6 +2,9 @@
 
 Small, versioned setup scripts for model experiments in Kaggle notebooks. Run Qwen with Ollama on a Kaggle GPU, then use it from OpenCode on your own computer through an authenticated Cloudflare Tunnel.
 
+<details>
+<summary><strong>Set up with an AI agent (Codex, Claude Code, or OpenCode)</strong></summary>
+
 ## Set up with an AI agent
 
 Copy this into Codex, Claude Code, OpenCode, or another coding agent with local file and network access:
@@ -39,6 +42,8 @@ claude "Read https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/hea
 These commands use the agent's existing model and permissions to help with setup. They do not configure Codex or Claude Code to run Qwen. Cloudflare and Kaggle actions still depend on the access available to that agent. If it cannot fetch the URL, provide the raw README text directly.
 
 Command syntax: [official Codex CLI reference](https://learn.chatgpt.com/docs/cli/reference) and [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference).
+
+</details>
 
 ## Available script
 
