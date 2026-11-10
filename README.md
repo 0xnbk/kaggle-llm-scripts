@@ -2,48 +2,17 @@
 
 Small, versioned setup scripts for model experiments in Kaggle notebooks. Run Qwen with Ollama on a Kaggle GPU, then use it from OpenCode on your own computer through an authenticated Cloudflare Tunnel.
 
-<details>
-<summary><strong>Set up with an AI agent (Codex, Claude Code, or OpenCode)</strong></summary>
-
-## Set up with an AI agent
-
-Copy this into Codex, Claude Code, OpenCode, or another coding agent with local file and network access:
-
-```text
-Help me set up Kaggle Qwen for OpenCode using this guide:
-https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/README.md
-Read the complete README, including collapsed sections. Inspect my OS,
-OpenCode version, and existing configuration before making changes.
-Reuse existing setup, preserve unrelated settings, and ask only for missing
-information. Guide me through any Cloudflare or Kaggle dashboard steps
-that you cannot perform. Keep my domain private in generated public files.
-Load credentials from a secure store; never request secrets in chat or put
-credentials in source files, command history, or logs. Verify the model
-list, streamed inference, and OpenCode QWEN_OK check. Report what passed
-and any remaining manual steps, then give me the command for daily use.
-```
-
-### Launch Codex or Claude Code with the setup request
-
-Use one of these commands with an already installed and signed-in agent. Each starts an interactive session with a setup request; it asks that agent to configure **OpenCode** using the instructions above.
-
 **Codex**
 
 ```bash
-codex "Read https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/README.md and follow its 'Set up with an AI agent' instructions to help me configure Kaggle Qwen for OpenCode."
+QWEN_SETUP_PROMPT="$(curl -fsSL https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/SETUP_PROMPT.txt)" && codex "$QWEN_SETUP_PROMPT"
 ```
 
 **Claude Code**
 
 ```bash
-claude "Read https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/README.md and follow its 'Set up with an AI agent' instructions to help me configure Kaggle Qwen for OpenCode."
+QWEN_SETUP_PROMPT="$(curl -fsSL https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/SETUP_PROMPT.txt)" && claude "$QWEN_SETUP_PROMPT"
 ```
-
-These commands use the agent's existing model and permissions to help with setup. They do not configure Codex or Claude Code to run Qwen. Cloudflare and Kaggle actions still depend on the access available to that agent. If it cannot fetch the URL, provide the raw README text directly.
-
-Command syntax: [official Codex CLI reference](https://learn.chatgpt.com/docs/cli/reference) and [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference).
-
-</details>
 
 ## Available script
 
