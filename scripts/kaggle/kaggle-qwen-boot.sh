@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 set +x
 
-MODEL="${OLLAMA_MODEL:-qwen3-coder:30b}"
+MODEL="${OLLAMA_MODEL:-qwen3.8:27b}"
 MODEL_DIR="${OLLAMA_MODELS:-/kaggle/working/ollama_models}"
 CONTEXT="${OLLAMA_CONTEXT_LENGTH:-32768}"
 BASE="/kaggle/working"
@@ -120,8 +120,8 @@ fi
 wait_for_api || { tail -n 40 "$OLLAMA_LOG" 2>/dev/null || true; die "Ollama API did not start; see $OLLAMA_LOG."; }
 
 if ! model_installed; then
-  status "Model $MODEL is missing; pulling it now (about 18 GB). Progress will appear below."
-  ollama pull "$MODEL" 2>&1 | tee -a "$BASE/ollama-pull.log" || die "Model pull failed. Rerun the script; Ollama can resume/reuse downloaded layers."
+  status "Model $MODEL is missing; pulling it now. Download size depends on the selected model; progress will appear below."
+  ollama pull "$MODEL" 2>&1 | tee -a "$BASE/ollama-pull.log" || die "Model pull failed. Rerun to resume downloaded layers. If Ollama reports an unsupported model or architecture, update Ollama and restart its server first."
 else
   status "Found $MODEL in the existing Ollama store; no model download needed."
 fi
@@ -134,8 +134,9 @@ model = sys.argv[1]
 payload = json.dumps({
     "model": model,
     "prompt": "Reply with exactly QWEN_OK and nothing else.",
+    "think": False,
     "stream": True,
-    "options": {"temperature": 0},
+    "options": {"temperature": 0, "num_predict": 64},
 }).encode()
 request = urllib.request.Request(
     "http://127.0.0.1:11434/api/generate",
