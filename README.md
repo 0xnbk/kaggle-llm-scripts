@@ -14,8 +14,9 @@ Read https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/
 
 | Script | What it does |
 | --- | --- |
-| [`kaggle-qwen-boot.sh`](scripts/kaggle/kaggle-qwen-boot.sh) | Checks for an NVIDIA GPU, installs Ollama if needed, reuses or downloads Qwen, starts Ollama, and checks for `QWEN_OK`. Defaults to `qwen3.8:27b`. It streams setup progress and model output into the notebook. If `CF_TUNNEL_TOKEN` is available, it connects the existing Cloudflare Tunnel with a local readiness watchdog and automatic connector recovery. |
+| [`kaggle-qwen-boot.sh`](scripts/kaggle/kaggle-qwen-boot.sh) | Checks for an NVIDIA GPU, installs Ollama if needed, reuses or downloads Qwen, and checks for `QWEN_OK`. Defaults to `qwen3.8:27b`. Starts a local streaming bridge that sends heartbeats during silent model generation. If `CF_TUNNEL_TOKEN` is available, it connects the existing Cloudflare Tunnel with a readiness watchdog and automatic connector recovery. |
 | [`kaggle-ollama-clear.sh`](scripts/kaggle/kaggle-ollama-clear.sh) | Stops Ollama, deletes all saved models and incomplete downloads in `/kaggle/working/ollama_models`, removes the old Ollama logs and server PID file, and reports free space before and after cleanup. |
+| [`ollama-stream-proxy.py`](scripts/kaggle/ollama-stream-proxy.py) | Internal helper started by the boot script. Relays OpenAI chat streams with 10-second SSE heartbeats, preserving complete tool-call events. No separate setup command is needed. |
 
 **Already set up?** Start your Kaggle session, run the script in [Step 5](#5-start-qwen-in-kaggle), then follow [Use OpenCode](#8-use-opencode-for-your-project). To use a different model, follow [Change models](#change-models). For a new setup, follow the steps below in order.
 
@@ -27,6 +28,7 @@ Read https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/
 - [Known working settings](#known-working-settings)
 - [Step-by-step setup](#step-by-step-setup)
 - [Troubleshooting](#troubleshooting)
+- [Connection resets during long file writes](#connection-resets-during-long-file-writes)
 - [Automatic tunnel recovery](#automatic-tunnel-recovery)
 - [Clear saved models after a disk-full failure](#clear-saved-models-after-a-disk-full-failure)
 - [Run a versioned release](#run-a-versioned-release)
@@ -38,7 +40,8 @@ Read https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/
 flowchart LR
     A[OpenCode on your computer] -->|HTTPS and Access credentials| B[Your hostname and Cloudflare Access]
     B -->|Cloudflare Tunnel| C[cloudflared in Kaggle]
-    C -->|HTTP to localhost:11434| D[Ollama and Qwen in Kaggle]
+    C -->|HTTP to localhost:11434| D[Local streaming bridge]
+    D -->|HTTP to 127.0.0.1:11435| E[Ollama and Qwen in Kaggle]
 ```
 
 OpenCode reads your project, edits files, and runs commands on **your computer**. It sends prompts, selected file contents, and tool results to **Qwen in Kaggle** for inference. The project does not need to be uploaded to the notebook as a checkout, but the content sent to the model leaves your computer.
@@ -61,12 +64,13 @@ Use a subdomain of a domain you control and have active in Cloudflare. You can r
 | --- | --- | --- |
 | Public hostname | `llm.example.com` | Cloudflare DNS, the tunnel's published route, and the Access application. |
 | Public API base URL | `https://llm.example.com/v1` | OpenCode and client-side API checks. Include `/v1`. |
-| Local service URL | `http://localhost:11434` | The tunnel route. This reaches Ollama inside the same Kaggle session as `cloudflared`. |
-| HTTP Host Header | `localhost:11434` | The tunnel route's additional HTTP settings. This is the Host header forwarded to Ollama. |
+| Local service URL | `http://localhost:11434` | The tunnel route. This reaches the streaming bridge inside the same Kaggle session as `cloudflared`. |
+| HTTP Host Header | `localhost:11434` | The tunnel route's additional HTTP settings. This is the Host header forwarded to the bridge. |
+| Ollama bind address | `127.0.0.1:11435` | Set by the latest boot script; the bridge forwards requests to this local server. |
 
 The local service URL uses HTTP because that connection stays inside the Kaggle environment. Your computer connects to the public hostname using HTTPS, and the tunnel connection is encrypted separately.
 
-**The HTTP Host Header setting is required for this loopback-only Ollama setup.** Ollama listens on `127.0.0.1:11434`. If the tunnel forwards the public hostname as the Host header, Ollama can return an empty `403 Forbidden` even after Cloudflare Access accepts your credentials. Setting the forwarded Host header to `localhost:11434` resolves that mismatch. See [Ollama's proxy and tunnel guidance](https://docs.ollama.com/faq#how-can-i-use-ollama-with-cloudflare-tunnel) and [Cloudflare's HTTP Host Header setting](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/origin-parameters/#httphostheader).
+**Keep HTTP Host Header set to `localhost:11434`.** The streaming bridge accepts loopback Host values and forwards a local Host header to Ollama. A public hostname in this header can still cause an empty `403 Forbidden` after Access accepts your credentials. Older boot scripts served Ollama directly on port `11434`; the latest script moves its managed server to `11435` and keeps the tunnel's service URL on `11434`. See [Ollama's proxy and tunnel guidance](https://docs.ollama.com/faq#how-can-i-use-ollama-with-cloudflare-tunnel) and [Cloudflare's HTTP Host Header setting](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/origin-parameters/#httphostheader).
 
 ### Keep the credentials separate
 
@@ -312,11 +316,14 @@ This quick start fetches the latest script from `main`. For a fixed version that
 
 ```text
 QWEN_OK
+Streaming bridge ready; silent model/tool-call generation is protected by SSE heartbeats.
 Cloudflare Tunnel connected; hostname routing is configured in Cloudflare.
 Tunnel watchdog enabled: local readiness checks and automatic connector recovery.
 ```
 
 The script prints the streamed answer and then a separate success marker, so seeing `QWEN_OK` twice is expected. `Waiting for Qwen output...` is a progress heartbeat while inference is pending.
+
+The bridge is installed automatically using Python 3.10 or newer. Its pinned `aiohttp` dependency goes into `/kaggle/working/ollama-proxy-packages`, separate from notebook packages. The helper is fetched from a fixed repository commit and checked against its SHA-256 before use. Rerunning replaces the tracked bridge and tunnel processes; pause client requests first. Model weights are reused.
 
 `QWEN_OK` here proves inference **inside Kaggle**. The tunnel message means the running connector reports an active Cloudflare connection through its local `/ready` endpoint. It does not verify your public DNS, Access policy, forwarded Host header, or OpenCode request. Verify those in Step 7. [Automatic tunnel recovery](#automatic-tunnel-recovery) explains the ongoing checks.
 
@@ -387,7 +394,10 @@ This format follows the current [OpenCode provider documentation](https://openco
       "name": "Kaggle Qwen (Cloudflare Access)",
       "settings": {
         "baseURL": "https://llm.example.com/v1",
-        "apiKey": "ollama"
+        "apiKey": "ollama",
+        "headerTimeout": 600000,
+        "chunkTimeout": 1800000,
+        "encoding": "none"
       },
       "headers": {
         "CF-Access-Client-Id": "{env:CF_ACCESS_CLIENT_ID}",
@@ -592,9 +602,10 @@ Closing OpenCode does not stop Kaggle. Stop the Kaggle session when finished to 
 | `No space left on device` while writing a model blob or `ollama-pull.log` | The Kaggle disk cannot accept more data. Old model weights and partial downloads can fill the same volume. Inspect disk usage, then [clear saved models](#clear-saved-models-after-a-disk-full-failure) if you want a complete model-store reset. |
 | Local `QWEN_OK`, but the public API fails | The local model works. Check public DNS, Access, the published route, and the HTTP Host Header; local inference does not test those. |
 | `401`/`403` with an Access error page, or a redirect to login | Check both client headers, token validity, the exact Access hostname, and the **Service Auth** policy's included token. |
-| Empty `403`, including after Access accepts credentials | Check **HTTP Host Header = `localhost:11434`** first. Ollama's loopback Host check can reject the public hostname. Do not assume every 403 means invalid Access credentials. |
+| Empty `403`, including after Access accepts credentials | Check **HTTP Host Header = `localhost:11434`** first. The bridge and older direct-Ollama setup reject a public Host value. Do not assume every 403 means invalid Access credentials. |
 | Cloudflare `1033`, often shown with HTTP 530 | No healthy connector is available for the named tunnel. Check that the Kaggle session is running, then inspect the [local watchdog and readiness checks](#automatic-tunnel-recovery). A historical connection message does not establish current tunnel health. |
-| HTTP 502 | A connector may be reachable while the local origin is not. Check Ollama, port `11434`, and the route's service URL. |
+| HTTP 502 | A connector may be reachable while the local origin is not. Check the bridge on `11434`, Ollama on `11435`, and the route's service URL. |
+| `ECONNRESET` or connection closed during a large write, often after about 125 seconds without output | Ollama can buffer tool-call arguments while generating. Apply the latest boot script's [streaming bridge](#connection-resets-during-long-file-writes), then check the client timeouts. |
 | Hostname does not resolve | Confirm the domain is active and the published route's DNS record exists. |
 | Model missing or a model-not-found response | Compare the client model ID with `ollama list` in Kaggle. The default ID includes the tag: `qwen3.8:27b`. |
 | OpenCode cannot find the provider, or rejects configuration fields | Check your OpenCode version and the configuration format in Step 6. Merge into the config used by that process, then restart OpenCode. |
@@ -602,6 +613,42 @@ Closing OpenCode does not stop Kaggle. Stop the Kaggle session when finished to 
 | `EACCES` creating `~/.local/state/opencode` on macOS | Use a writable `XDG_STATE_HOME`, as in the optional wrapper. |
 | Initial inference takes minutes or times out | Inspect Ollama's logs and GPU status; a cold model load can be slow. Increasing a client's timeout does not override Cloudflare's own proxy timeout limits. |
 | Output arrives all at once | Confirm `/v1/chat/completions`, `stream: true`, `text/event-stream`, and a client that displays events incrementally. A very short answer may complete almost immediately. |
+
+### Connection resets during long file writes
+
+Cloudflare lists a **125-second Proxy Read Timeout**. If Ollama stops sending bytes while the model builds a large file-writing tool call, an already-started response can be closed and OpenCode may report `ECONNRESET`. A long stream can work as long as data continues to arrive; the timeout is not a 125-second total generation limit. See [Cloudflare's connection limits](https://developers.cloudflare.com/fundamentals/reference/connection-limits/) and [524 guidance](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/error-524/).
+
+This is a plausible cause when resets occur near that interval, not a diagnosis for every socket error. Ollama's [Qwen parser](https://github.com/ollama/ollama/blob/main/model/parsers/qwen3coder.go) buffers tool-call content until the closing tool-call tag. At roughly 9 tokens per second, a file-sized argument can leave the connection silent for several minutes even while the GPU is working. Increasing an OpenCode timeout alone cannot change Cloudflare's limit.
+
+The latest boot script places a small bridge between the existing tunnel and Ollama. For streamed `/v1/chat/completions`, it sends response headers immediately and an SSE comment every 10 seconds. Comments keep response data flowing without creating model tokens or modifying the model's thinking settings. Complete upstream events are forwarded intact, so a heartbeat cannot split tool-call JSON. Other API requests are forwarded without added heartbeats.
+
+To apply it, **pause OpenCode's retry loop**, then run this Kaggle cell:
+
+```bash
+%%bash
+set -euo pipefail
+curl -fsSL https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/scripts/kaggle/kaggle-qwen-boot.sh | OLLAMA_MODEL='qwen3.8:27b' bash
+```
+
+Wait for `Streaming bridge ready` and the tunnel connection message. The first upgrade restarts the managed Ollama server on port `11435`; it keeps the saved weights. Keep the Cloudflare service URL and HTTP Host Header on `localhost:11434`.
+
+For OpenCode 2, the [provider example in Step 6](#alternative-configuration-for-opencode-versions-using-providerspackagesettings) allows 10 minutes for headers and 30 minutes between response chunks, and sends uncompressed JSON. These limits apply to every model in that provider. If V2 is reading an existing V1 configuration, these three fields can instead be added to that provider's `options`; the V2 loader normalizes them into `settings`. After saving the config, use `opencode reload` once the current request is stopped, then resume the session. See [OpenCode's timeout and encoding documentation](https://opencode.ai/docs/providers/#timeouts). These longer client limits complement the bridge; they do not replace it.
+
+Check the bridge in Kaggle:
+
+```bash
+%%bash
+curl --fail --silent --show-error --max-time 3 http://127.0.0.1:11434/_kaggle/stream-proxy/health
+tail -n 20 /kaggle/working/ollama-stream-proxy.log
+tail -n 20 /kaggle/working/ollama.log
+ollama ps
+```
+
+The health endpoint identifies the bridge and its upstream port; it does not test model inference. Step 7's public streaming check should also show `: connected` and, during a pause, `: keepalive` comments. Because headers are sent before Ollama responds, a later upstream failure is reported as an explicit SSE `error` event within HTTP 200. The bridge never manufactures a successful `[DONE]` event, and cancelling the client request closes its upstream request. Non-streaming requests retain Ollama's HTTP status.
+
+**Cloudflare cost:** this is a Python process inside Kaggle using the same tunnel and Access application. It adds small comments to the existing response and creates no Cloudflare resources or paid services. It does not change a plan or billing setting. Older releases such as `v0.1.3` do not include it.
+
+Local tests reproduce an idle timeout without heartbeats and a successful response through the bridge, including fragmented tool calls and cancellation. Live Kaggle GPU and public-tunnel validation must be performed after running the updated cell. Real network interruptions, Ollama crashes, and Kaggle session termination can still close a connection. Until the bridge is installed, asking the agent to use small patches rather than rewriting whole files can reduce silent generation gaps.
 
 ### Automatic tunnel recovery
 
@@ -731,13 +778,13 @@ curl -fsSL "$BASE/SHA256SUMS" -o /tmp/SHA256SUMS
 OLLAMA_MODEL=qwen3.8:27b bash /tmp/kaggle-qwen-boot.sh
 ```
 
-The hostname, Access policy, and HTTP Host Header are Cloudflare configuration and must also be set when using a pinned script release. The example explicitly selects Qwen3.8 because `v0.1.3` predates the new default; its original default is Qwen3-Coder, and it does not include the newer thinking/output limits or tunnel watchdog.
+The hostname, Access policy, and HTTP Host Header are Cloudflare configuration and must also be set when using a pinned script release. The example explicitly selects Qwen3.8 because `v0.1.3` predates the new default; its original default is Qwen3-Coder, and it does not include the newer thinking/output limits, streaming bridge, or tunnel watchdog.
 
 The script uses `/kaggle/working/ollama_models` by default and skips pulling `qwen3.8:27b` when Ollama already sees it. Model weights stay separate from this repository. Kaggle file persistence determines whether those files carry over between sessions.
 
 ## Release process
 
-Push a version tag such as `v0.2.0`. GitHub Actions checks shell syntax, attaches every script in `scripts/kaggle/` plus `SHA256SUMS`, and publishes a GitHub Release. Published releases are configured to be immutable, so a versioned download stays tied to that release.
+Push a version tag such as `v0.2.0`. GitHub Actions installs the pinned test dependency, checks shell and Python syntax, and runs the tests. It attaches the shell and Python scripts in `scripts/kaggle/` plus `SHA256SUMS`, then publishes a GitHub Release. Published releases are configured to be immutable, so a versioned download stays tied to that release. Ordinary pushes to `main` do not trigger this tag-only workflow.
 
 To add another script, place it in `scripts/kaggle/`, document it in the table above, then push a new version tag. A README-only update can be pushed to `main` without publishing a new script release.
 

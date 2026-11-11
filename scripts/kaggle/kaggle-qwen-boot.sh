@@ -7,7 +7,7 @@ MODEL_DIR="${OLLAMA_MODELS:-/kaggle/working/ollama_models}"
 CONTEXT="${OLLAMA_CONTEXT_LENGTH:-32768}"
 BASE="/kaggle/working"
 OLLAMA_LOG="$BASE/ollama.log"
-export OLLAMA_HOST="127.0.0.1:11434"
+export OLLAMA_HOST="127.0.0.1:11435"
 export OLLAMA_MODELS="$MODEL_DIR"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -88,7 +88,61 @@ install_ollama() {
   status "Ollama installed from the official GitHub release."
 }
 
-api_ready() { curl -fsS --max-time 2 http://127.0.0.1:11434/api/version >/dev/null 2>&1; }
+api_ready() { curl -fsS --max-time 2 http://127.0.0.1:11435/api/version >/dev/null 2>&1; }
+legacy_api_ready() { curl -fsS --max-time 2 http://127.0.0.1:11434/api/version >/dev/null 2>&1; }
+proxy_ready() {
+  curl -fsS --max-time 2 http://127.0.0.1:11434/_kaggle/stream-proxy/health 2>/dev/null |
+    python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("service")=="ollama-stream-proxy" and d.get("upstream_port")==11435 else 1)' >/dev/null 2>&1
+}
+stop_managed_process() {
+  python3 - "$BASE" "$1" "${2:-}" <<'PROCESS_STOP'
+import os
+from pathlib import Path
+import signal
+import sys
+import time
+
+
+def stop_managed(base, kind, expected_host):
+    marker = base / ("ollama-serve.pid" if kind == "ollama" else "ollama-stream-proxy.pid")
+    try:
+        pid = int(marker.read_text().strip())
+    except (OSError, ValueError):
+        return
+    if pid <= 1:
+        return
+
+    def matches():
+        try:
+            process = Path("/proc") / str(pid)
+            args = (process / "cmdline").read_bytes().split(b"\0")
+            if kind == "proxy":
+                return os.fsencode(base / "ollama-stream-proxy.py") in args
+            environment = (process / "environ").read_bytes().split(b"\0")
+            return (Path(os.fsdecode(args[0])).name == "ollama" and b"serve" in args
+                    and b"OLLAMA_HOST=" + os.fsencode(expected_host) in environment)
+        except OSError:
+            return False
+
+    if not matches():
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    for _ in range(150):
+        if not matches():
+            break
+        time.sleep(0.1)
+    else:
+        raise RuntimeError("The managed local service did not stop; refusing to start a duplicate.")
+    marker.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    stop_managed(Path(sys.argv[1]), sys.argv[2], sys.argv[3])
+PROCESS_STOP
+}
 model_installed() { ollama list 2>/dev/null | awk -v m="$MODEL" 'NR > 1 && $1 == m { found=1 } END { exit !found }'; }
 wait_for_api() {
   for second in {1..90}; do
@@ -102,9 +156,38 @@ wait_for_api() {
 status "Checking Ollama installation..."
 install_ollama
 
+status "Checking the local streaming bridge dependencies..."
+python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' || die "The streaming bridge needs Python 3.10 or newer."
+PROXY_PACKAGES="$BASE/ollama-proxy-packages"
+PROXY_PYTHONPATH="$PROXY_PACKAGES${PYTHONPATH:+:$PYTHONPATH}"
+if ! PYTHONPATH="$PROXY_PYTHONPATH" python3 -c 'import aiohttp; assert aiohttp.__version__ == "3.14.5"' >/dev/null 2>&1; then
+  python3 -m pip install --disable-pip-version-check --no-cache-dir --upgrade \
+    --target "$PROXY_PACKAGES" 'aiohttp==3.14.5' || die "Could not install the isolated streaming bridge dependencies."
+fi
+
+PROXY_SCRIPT="$BASE/ollama-stream-proxy.py"
+PROXY_SHA256="1e9699fe5f211754ab7c125153677bbce2cd0a58af6730ac27e743f8919b286b"
+PROXY_URL="https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/f73e4512684089eb315aeb40a0e54a9e71e236ca/scripts/kaggle/ollama-stream-proxy.py"
+proxy_source_matches() {
+  python3 -c 'import hashlib,pathlib,sys; sys.exit(0 if hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest()==sys.argv[2] else 1)' "$1" "$PROXY_SHA256" >/dev/null 2>&1
+}
+if ! proxy_source_matches "$PROXY_SCRIPT"; then
+  status "Downloading the pinned streaming bridge..."
+  curl -fsSL --retry 3 --retry-all-errors "$PROXY_URL" -o "$TMP_DIR/ollama-stream-proxy.py"
+  proxy_source_matches "$TMP_DIR/ollama-stream-proxy.py" || die "Streaming bridge checksum verification failed."
+  [[ ! -L "$PROXY_SCRIPT" ]] || die "Refusing to overwrite a symlink at $PROXY_SCRIPT."
+  cp "$TMP_DIR/ollama-stream-proxy.py" "$PROXY_SCRIPT"
+fi
+if legacy_api_ready && ! proxy_ready; then
+  status "Moving the managed Ollama server to port 11435 for the streaming bridge..."
+  stop_managed_process ollama 127.0.0.1:11434
+  for _ in {1..15}; do legacy_api_ready || break; sleep 1; done
+  legacy_api_ready && die "Port 11434 is still occupied by an unmanaged service. Stop that service or start a fresh Kaggle session."
+fi
+
 if api_ready && ! model_installed; then
   status "Existing server does not see $MODEL; restarting with the persistent model directory."
-  pkill -f '[o]llama serve' 2>/dev/null || true
+  stop_managed_process ollama "$OLLAMA_HOST"
   for _ in {1..15}; do api_ready || break; sleep 1; done
   api_ready && die "Could not stop the existing Ollama server; stopping to avoid pulling the model into the wrong directory."
 fi
@@ -112,7 +195,7 @@ fi
 if ! api_ready; then
   status "Starting Ollama with model directory $MODEL_DIR and context $CONTEXT..."
   nohup env OLLAMA_MODELS="$MODEL_DIR" OLLAMA_CONTEXT_LENGTH="$CONTEXT" \
-    OLLAMA_HOST=127.0.0.1:11434 ollama serve >"$OLLAMA_LOG" 2>&1 </dev/null &
+    OLLAMA_HOST=127.0.0.1:11435 ollama serve >"$OLLAMA_LOG" 2>&1 </dev/null &
   echo "$!" > "$BASE/ollama-serve.pid"
 fi
 
@@ -138,7 +221,7 @@ payload = json.dumps({
     "options": {"temperature": 0, "num_predict": 64},
 }).encode()
 request = urllib.request.Request(
-    "http://127.0.0.1:11434/api/generate",
+    "http://127.0.0.1:11435/api/generate",
     data=payload,
     headers={"Content-Type": "application/json"},
 )
@@ -178,6 +261,24 @@ if answer != "QWEN_OK":
     sys.exit(1)
 print("QWEN_OK")
 PY
+
+stop_managed_process proxy
+proxy_ready && die "The old streaming bridge did not stop; refusing to start a duplicate."
+status "Starting streaming bridge on port 11434 with 10-second SSE heartbeats..."
+nohup env PYTHONPATH="$PROXY_PYTHONPATH" python3 -u "$PROXY_SCRIPT" \
+  --listen-port 11434 --upstream-port 11435 >"$BASE/ollama-stream-proxy.log" 2>&1 </dev/null &
+proxy_pid="$!"
+echo "$proxy_pid" > "$BASE/ollama-stream-proxy.pid"
+for _ in {1..30}; do
+  proxy_ready && break
+  kill -0 "$proxy_pid" 2>/dev/null || break
+  sleep 1
+done
+if ! kill -0 "$proxy_pid" 2>/dev/null || ! proxy_ready; then
+  tail -n 25 "$BASE/ollama-stream-proxy.log" 2>/dev/null || true
+  die "Streaming bridge did not start."
+fi
+status "Streaming bridge ready; silent model/tool-call generation is protected by SSE heartbeats."
 
 if [[ -n "$TUNNEL_SECRET" ]]; then
   if ! command -v cloudflared >/dev/null; then
