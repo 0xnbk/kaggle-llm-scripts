@@ -7,7 +7,6 @@ MODEL_DIR="${OLLAMA_MODELS:-/kaggle/working/ollama_models}"
 CONTEXT="${OLLAMA_CONTEXT_LENGTH:-32768}"
 BASE="/kaggle/working"
 OLLAMA_LOG="$BASE/ollama.log"
-CLOUDFLARED_LOG="$BASE/cloudflared.log"
 export OLLAMA_HOST="127.0.0.1:11434"
 export OLLAMA_MODELS="$MODEL_DIR"
 
@@ -196,28 +195,203 @@ if [[ -n "$TUNNEL_SECRET" ]]; then
     fi
   fi
   if command -v cloudflared >/dev/null; then
-    if [[ -f "$BASE/cloudflared.pid" ]] && kill -0 "$(cat "$BASE/cloudflared.pid")" 2>/dev/null; then
-      status "Cloudflare Tunnel process is already running."
-    else
-      export TUNNEL_TOKEN="$TUNNEL_SECRET"
-      status "Starting Cloudflare Tunnel..."
-      nohup cloudflared tunnel --no-autoupdate run >"$CLOUDFLARED_LOG" 2>&1 </dev/null &
-      tunnel_pid="$!"
-      echo "$tunnel_pid" > "$BASE/cloudflared.pid"
-      unset TUNNEL_TOKEN
-      status "Waiting for Cloudflare Tunnel registration..."
-      for _ in {1..20}; do
-        grep -qi 'Registered tunnel connection' "$CLOUDFLARED_LOG" 2>/dev/null && break
-        kill -0 "$tunnel_pid" 2>/dev/null || break
-        sleep 1
-      done
-      if grep -qi 'Registered tunnel connection' "$CLOUDFLARED_LOG" 2>/dev/null; then
-        status "Cloudflare Tunnel connected; hostname routing is configured in Cloudflare."
-      else
-        status "Tunnel started but not confirmed connected; inspect $CLOUDFLARED_LOG."
-        tail -n 15 "$CLOUDFLARED_LOG" 2>/dev/null || true
-      fi
-    fi
+    cat > "$BASE/cloudflared-watch.py" <<'TUNNEL_WATCHER'
+import fcntl
+import http.client
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+BASE = Path("/kaggle/working")
+CHECK_INTERVAL = 15
+FAILURE_LIMIT = 6
+STARTUP_FAILURE_LIMIT = 12
+MAX_LOG_BYTES = 5 * 1024 * 1024
+
+
+def log(message):
+    print(time.strftime("[%H:%M:%S] ") + message, flush=True)
+
+
+def ready():
+    connection = http.client.HTTPConnection("127.0.0.1", 20241, timeout=2)
+    try:
+        connection.request("GET", "/ready")
+        return connection.getresponse().status == 200
+    except (OSError, http.client.HTTPException):
+        return False
+    finally:
+        connection.close()
+
+
+def read_pid(path):
+    try:
+        pid = int(path.read_text().strip())
+        return pid if pid > 1 else None
+    except (OSError, ValueError):
+        return None
+
+
+def owned_process(pid, kind):
+    try:
+        args = (Path("/proc") / str(pid) / "cmdline").read_bytes().split(b"\0")
+        if kind == "watch":
+            return os.fsencode(Path(__file__).resolve()) in args and b"watch" in args
+        if Path(os.fsdecode(args[0])).name != "cloudflared" or b"tunnel" not in args or b"run" not in args:
+            return False
+        environment = (Path("/proc") / str(pid) / "environ").read_bytes().split(b"\0")
+        expected = b"TUNNEL_TOKEN=" + os.fsencode(os.environ["TUNNEL_TOKEN"])
+        return expected in environment
+    except (OSError, KeyError):
+        return False
+
+
+def stop_tracked(filename, kind):
+    path = BASE / filename
+    pid = read_pid(path)
+    if pid and owned_process(pid, kind):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        for _ in range(150):
+            if not owned_process(pid, kind):
+                break
+            time.sleep(0.1)
+        else:
+            raise RuntimeError("Previous tunnel process did not stop; refusing to start a duplicate.")
+    path.unlink(missing_ok=True)
+
+
+def stop_child(child):
+    if child.poll() is None:
+        child.terminate()
+    try:
+        child.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait()
+
+
+def rotate_logs():
+    for name in ("cloudflared.log", "cloudflared-watch.log"):
+        path = BASE / name
+        if path.exists() and path.stat().st_size > MAX_LOG_BYTES:
+            with path.open("wb"):
+                pass
+
+
+def monitor(child, stopped):
+    failures = 0
+    connected = False
+    while child.poll() is None:
+        if stopped.wait(CHECK_INTERVAL):
+            return "stopped"
+        rotate_logs()
+        if ready():
+            connected = True
+            if failures:
+                log("Tunnel connection recovered.")
+            failures = 0
+        else:
+            failures += 1
+            limit = FAILURE_LIMIT if connected else STARTUP_FAILURE_LIMIT
+            if failures >= limit:
+                return f"readiness failed {failures} consecutive checks"
+    return "connector exited"
+
+
+def watch(protocol):
+    stopped = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stopped.set())
+    signal.signal(signal.SIGINT, lambda *_: stopped.set())
+    with (BASE / "cloudflared-watch.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log("A tunnel watcher is already running.")
+            return
+        (BASE / "cloudflared-watch.pid").write_text(str(os.getpid()))
+        child = None
+        backoff = 2
+        try:
+            while not stopped.is_set():
+                rotate_logs()
+                with (BASE / "cloudflared.log").open("ab") as output:
+                    child = subprocess.Popen(
+                        ["cloudflared", "tunnel", "--no-autoupdate", "--metrics", "127.0.0.1:20241",
+                         "--protocol", protocol, "run"],
+                        stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+                    )
+                (BASE / "cloudflared.pid").write_text(str(child.pid))
+                began = time.monotonic()
+                reason = monitor(child, stopped)
+                stop_child(child)
+                child = None
+                (BASE / "cloudflared.pid").unlink(missing_ok=True)
+                if stopped.is_set():
+                    break
+                if time.monotonic() - began >= 300:
+                    backoff = 2
+                log(f"Restarting existing tunnel: {reason}; retry in {backoff}s.")
+                if stopped.wait(backoff):
+                    break
+                backoff = min(backoff * 2, 60)
+        finally:
+            if child is not None:
+                stop_child(child)
+            (BASE / "cloudflared.pid").unlink(missing_ok=True)
+            (BASE / "cloudflared-watch.pid").unlink(missing_ok=True)
+
+
+def start(protocol):
+    stop_tracked("cloudflared-watch.pid", "watch")
+    stop_tracked("cloudflared.pid", "connector")
+    rotate_logs()
+    with (BASE / "cloudflared-watch.log").open("ab") as output:
+        daemon = subprocess.Popen(
+            [sys.executable, str(Path(__file__).resolve()), "watch"],
+            stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT,
+            env={**os.environ, "CF_TUNNEL_PROTOCOL": protocol},
+            start_new_session=True,
+        )
+    healthy_checks = 0
+    for second in range(120):
+        if daemon.poll() is not None:
+            raise RuntimeError("Tunnel watcher stopped. Inspect /kaggle/working/cloudflared-watch.log.")
+        pid = read_pid(BASE / "cloudflared.pid")
+        connected = pid and owned_process(pid, "connector") and ready()
+        healthy_checks = healthy_checks + 1 if connected else 0
+        if healthy_checks >= 2:
+            log("Cloudflare Tunnel connected; hostname routing is configured in Cloudflare.")
+            log("Tunnel watchdog enabled: local readiness checks and automatic connector recovery.")
+            return
+        if second and second % 15 == 0:
+            log(f"Waiting for a live tunnel connection ({second}s)...")
+        time.sleep(1)
+    raise RuntimeError("Tunnel is not ready. The watcher will keep retrying; inspect cloudflared-watch.log and cloudflared.log.")
+
+
+if __name__ == "__main__":
+    try:
+        if not BASE.is_dir() or not os.environ.get("TUNNEL_TOKEN"):
+            raise RuntimeError("Kaggle workspace and TUNNEL_TOKEN are required.")
+        protocol = os.environ.get("CF_TUNNEL_PROTOCOL", "auto")
+        if protocol not in ("auto", "http2", "quic"):
+            raise RuntimeError("CF_TUNNEL_PROTOCOL must be auto, http2, or quic.")
+        {"start": start, "watch": watch}[sys.argv[1]](protocol)
+    except (OSError, RuntimeError, KeyError, IndexError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
+TUNNEL_WATCHER
+    export TUNNEL_TOKEN="$TUNNEL_SECRET"
+    status "Starting supervised Cloudflare Tunnel and checking live readiness..."
+    python3 "$BASE/cloudflared-watch.py" start
+    unset TUNNEL_TOKEN
   else
     echo "Warning: cloudflared is unavailable; local Qwen is working, but the tunnel was skipped." >&2
   fi

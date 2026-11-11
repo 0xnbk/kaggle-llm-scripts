@@ -14,7 +14,7 @@ Read https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/
 
 | Script | What it does |
 | --- | --- |
-| [`kaggle-qwen-boot.sh`](scripts/kaggle/kaggle-qwen-boot.sh) | Checks for an NVIDIA GPU, installs Ollama if needed, reuses or downloads Qwen, starts Ollama, and checks for `QWEN_OK`. Defaults to `qwen3.8:27b`. It streams setup progress and model output into the notebook. If `CF_TUNNEL_TOKEN` is available, it also connects an existing Cloudflare Tunnel. |
+| [`kaggle-qwen-boot.sh`](scripts/kaggle/kaggle-qwen-boot.sh) | Checks for an NVIDIA GPU, installs Ollama if needed, reuses or downloads Qwen, starts Ollama, and checks for `QWEN_OK`. Defaults to `qwen3.8:27b`. It streams setup progress and model output into the notebook. If `CF_TUNNEL_TOKEN` is available, it connects the existing Cloudflare Tunnel with a local readiness watchdog and automatic connector recovery. |
 | [`kaggle-ollama-clear.sh`](scripts/kaggle/kaggle-ollama-clear.sh) | Stops Ollama, deletes all saved models and incomplete downloads in `/kaggle/working/ollama_models`, removes the old Ollama logs and server PID file, and reports free space before and after cleanup. |
 
 **Already set up?** Start your Kaggle session, run the script in [Step 5](#5-start-qwen-in-kaggle), then follow [Use OpenCode](#8-use-opencode-for-your-project). To use a different model, follow [Change models](#change-models). For a new setup, follow the steps below in order.
@@ -27,6 +27,7 @@ Read https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/
 - [Known working settings](#known-working-settings)
 - [Step-by-step setup](#step-by-step-setup)
 - [Troubleshooting](#troubleshooting)
+- [Automatic tunnel recovery](#automatic-tunnel-recovery)
 - [Clear saved models after a disk-full failure](#clear-saved-models-after-a-disk-full-failure)
 - [Run a versioned release](#run-a-versioned-release)
 - [Release process](#release-process)
@@ -312,11 +313,12 @@ This quick start fetches the latest script from `main`. For a fixed version that
 ```text
 QWEN_OK
 Cloudflare Tunnel connected; hostname routing is configured in Cloudflare.
+Tunnel watchdog enabled: local readiness checks and automatic connector recovery.
 ```
 
 The script prints the streamed answer and then a separate success marker, so seeing `QWEN_OK` twice is expected. `Waiting for Qwen output...` is a progress heartbeat while inference is pending.
 
-`QWEN_OK` here proves inference **inside Kaggle**. The tunnel message means the connector registered with Cloudflare; it does not verify your public DNS, Access policy, forwarded Host header, or OpenCode request. Verify those in Step 7.
+`QWEN_OK` here proves inference **inside Kaggle**. The tunnel message means the running connector reports an active Cloudflare connection through its local `/ready` endpoint. It does not verify your public DNS, Access policy, forwarded Host header, or OpenCode request. Verify those in Step 7. [Automatic tunnel recovery](#automatic-tunnel-recovery) explains the ongoing checks.
 
 Without `CF_TUNNEL_TOKEN`, the script still runs the local model check and skips the tunnel. Keep Access credentials on your computer; the notebook only needs the tunnel token.
 
@@ -591,7 +593,7 @@ Closing OpenCode does not stop Kaggle. Stop the Kaggle session when finished to 
 | Local `QWEN_OK`, but the public API fails | The local model works. Check public DNS, Access, the published route, and the HTTP Host Header; local inference does not test those. |
 | `401`/`403` with an Access error page, or a redirect to login | Check both client headers, token validity, the exact Access hostname, and the **Service Auth** policy's included token. |
 | Empty `403`, including after Access accepts credentials | Check **HTTP Host Header = `localhost:11434`** first. Ollama's loopback Host check can reject the public hostname. Do not assume every 403 means invalid Access credentials. |
-| Cloudflare `1033`, often shown with HTTP 530 | No healthy connector is available for the named tunnel. Check that the Kaggle session and `cloudflared` are running with the correct tunnel token. |
+| Cloudflare `1033`, often shown with HTTP 530 | No healthy connector is available for the named tunnel. Check that the Kaggle session is running, then inspect the [local watchdog and readiness checks](#automatic-tunnel-recovery). A historical connection message does not establish current tunnel health. |
 | HTTP 502 | A connector may be reachable while the local origin is not. Check Ollama, port `11434`, and the route's service URL. |
 | Hostname does not resolve | Confirm the domain is active and the published route's DNS record exists. |
 | Model missing or a model-not-found response | Compare the client model ID with `ollama list` in Kaggle. The default ID includes the tag: `qwen3.8:27b`. |
@@ -600,6 +602,40 @@ Closing OpenCode does not stop Kaggle. Stop the Kaggle session when finished to 
 | `EACCES` creating `~/.local/state/opencode` on macOS | Use a writable `XDG_STATE_HOME`, as in the optional wrapper. |
 | Initial inference takes minutes or times out | Inspect Ollama's logs and GPU status; a cold model load can be slow. Increasing a client's timeout does not override Cloudflare's own proxy timeout limits. |
 | Output arrives all at once | Confirm `/v1/chat/completions`, `stream: true`, `text/event-stream`, and a client that displays events incrementally. A very short answer may complete almost immediately. |
+
+### Automatic tunnel recovery
+
+Cloudflare error `1033` means its network cannot find a healthy connector for the tunnel. It can appear as HTTP `530` in OpenCode even while Kaggle's CPU/GPU display remains visible. See [Cloudflare's explanation](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1033/).
+
+The latest boot script starts a watchdog **inside the current Kaggle session**. It checks `http://127.0.0.1:20241/ready` every 15 seconds. Cloudflare documents `/ready` as returning HTTP 200 when the connector has an active connection to its network. A running PID or an earlier connection log is not used as the readiness check. See [Cloudflare's readiness example](https://developers.cloudflare.com/tunnel/guides/kubernetes/).
+
+If the connector exits, the watchdog restarts it. After an established connection is lost, six consecutive failed checks trigger a restart; the initial connection gets twelve checks to allow native reconnection and protocol fallback. Restart delays increase from 2 seconds to a maximum of 60 seconds. Brief disconnects can recover through `cloudflared` without a restart. The watchdog keeps one managed instance, checks tracked process identity, and stops its child connector when shut down.
+
+**Cloudflare cost:** the watchdog's HTTP checks stay on localhost and reuse the existing tunnel. They create no additional tunnels, users, paid health checks, load balancers, Workers, storage, or scheduled Cloudflare services. No Cloudflare plan or billing settings are changed. Cloudflare currently includes the first 1,000 tunnels per account at no cost; paid additional capacity is a separate purchase. See [Cloudflare's tunnel pricing](https://developers.cloudflare.com/tunnel/features/tunnels-for-platforms/#pricing).
+
+To apply the watchdog or manually restart a disconnected connector, rerun the latest boot command. It replaces the tracked tunnel processes and reuses installed model weights:
+
+```bash
+%%bash
+set -euo pipefail
+curl -fsSL https://raw.githubusercontent.com/0xnbk/kaggle-llm-scripts/refs/heads/main/scripts/kaggle/kaggle-qwen-boot.sh | OLLAMA_MODEL='qwen3.8:27b' bash
+```
+
+Check its current status in another Kaggle cell:
+
+```bash
+%%bash
+curl --silent --show-error --max-time 3 --output /dev/null \
+  --write-out 'Tunnel readiness: HTTP %{http_code}\n' http://127.0.0.1:20241/ready
+tail -n 20 /kaggle/working/cloudflared-watch.log
+tail -n 20 /kaggle/working/cloudflared.log
+```
+
+HTTP 200 confirms the connector currently reports an active connection. The watchdog log records restarts and recovery. Both logs are truncated when they exceed 5 MiB to limit disk growth. The runtime files `cloudflared-watch.py`, `cloudflared-watch.pid`, `cloudflared-watch.lock`, and `cloudflared.pid` live in `/kaggle/working`; the tunnel token is passed in process environments, not written into the watcher file or its command arguments.
+
+The default protocol is `auto`, retaining Cloudflare's native QUIC/HTTP2 fallback. If connector logs show QUIC/UDP timeouts or idle disconnects, you can test TCP by adding `CF_TUNNEL_PROTOCOL=http2` before `bash` in the boot command. TCP port 7844 must be reachable for that option. See [Cloudflare's protocol guidance](https://developers.cloudflare.com/tunnel/troubleshooting/).
+
+The watchdog covers connector failures while it and the Kaggle session remain running. It does not keep a notebook alive, extend GPU quotas, recover a terminated session, or prove that Ollama itself is healthy. After Kaggle ends the session, start a new session and run the boot command again. Older pinned releases such as `v0.1.3` do not include this watchdog.
 
 ### Clear saved models after a disk-full failure
 
@@ -695,7 +731,7 @@ curl -fsSL "$BASE/SHA256SUMS" -o /tmp/SHA256SUMS
 OLLAMA_MODEL=qwen3.8:27b bash /tmp/kaggle-qwen-boot.sh
 ```
 
-The hostname, Access policy, and HTTP Host Header are Cloudflare configuration and must also be set when using a pinned script release. The example explicitly selects Qwen3.8 because `v0.1.3` predates the new default; its original default is Qwen3-Coder, and its smoke check does not include the newer thinking and output limits.
+The hostname, Access policy, and HTTP Host Header are Cloudflare configuration and must also be set when using a pinned script release. The example explicitly selects Qwen3.8 because `v0.1.3` predates the new default; its original default is Qwen3-Coder, and it does not include the newer thinking/output limits or tunnel watchdog.
 
 The script uses `/kaggle/working/ollama_models` by default and skips pulling `qwen3.8:27b` when Ollama already sees it. Model weights stay separate from this repository. Kaggle file persistence determines whether those files carry over between sessions.
 
