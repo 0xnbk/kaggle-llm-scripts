@@ -17,21 +17,23 @@ jobs:
 
       - name: Validate scripts
         run: |
+          python3 -m pip install -r requirements.txt
           for script in scripts/kaggle/*.sh; do bash -n "$script"; done
+          python3 -m py_compile scripts/kaggle/*.py
           python3 -m unittest discover -s tests -p 'test_*.py'
 
       - name: Package scripts and checksums
         run: |
           mkdir -p dist
-          cp scripts/kaggle/*.sh dist/
-          (cd dist && sha256sum *.sh > SHA256SUMS)
+          cp scripts/kaggle/*.sh scripts/kaggle/*.py dist/
+          (cd dist && sha256sum *.sh *.py > SHA256SUMS)
 
       - name: Create draft release and attach scripts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            dist/*.sh dist/SHA256SUMS \
+            dist/*.sh dist/*.py dist/SHA256SUMS \
             --verify-tag \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
